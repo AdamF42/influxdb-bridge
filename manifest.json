@@ -5,7 +5,7 @@
   "short_name": "InfluxDB",
   "version": "0.2.0",
   "description": "Save your device states to an InfluxDB",
-  "homepage_url": "https://github.com/tim-hellhake/influxdb-bridge#readme",
+  "homepage_url": "https://github.com/AdamF42/influxdb-bridge#readme",
   "license": "MPL-2.0",
   "author": "Tim Hellhake",
   "gateway_specific_settings": {
@@ -23,7 +23,9 @@
         "accessToken",
         "host",
         "port",
-        "database"
+        "org",
+        "bucket",
+        "influxToken"
       ],
       "properties": {
         "accessToken": {
@@ -38,9 +40,17 @@
           "type": "integer",
           "title": "The port of the influxdb"
         },
-        "database": {
+        "org": {
           "type": "string",
-          "title": "The database to write to"
+          "title": "The org of the influxdb"
+        },
+        "bucket": {
+          "type": "string",
+          "title": "The bucket of the influxdb"
+        },
+        "influxToken": {
+          "type": "string",
+          "title": "The access token for influxdb"
         }
       }
     }

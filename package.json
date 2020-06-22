@@ -27,7 +27,8 @@
     "manifest.json"
   ],
   "dependencies": {
-    "influx": "^5.5.1",
+    "@influxdata/influxdb-client": "^1.2.0",
+    "space-lift": "^0.8.7",
     "websocket": "^1.0.31",
     "webthings-client": "1.1.0"
   },

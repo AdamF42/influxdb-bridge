@@ -1,2 +1,8 @@
 node_modules
 lib
+
+*.tgz
+
+*.sha256sum
+
+SHA256SUMS
