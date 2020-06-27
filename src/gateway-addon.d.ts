@@ -8,4 +8,8 @@ declare module 'gateway-addon' {
     class Adapter {
         constructor(addonManager: any, id: string, packageName: string);
     }
+
+    class Database {
+        constructor(packageName:string, path?:string);
+    }
 }

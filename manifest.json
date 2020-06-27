@@ -1,13 +1,13 @@
 {
   "manifest_version": 1,
   "id": "influxdb-bridge",
-  "name": "InfluxDB",
-  "short_name": "InfluxDB",
+  "name": "InfluxDB2.0",
+  "short_name": "InfluxDB2.0",
   "version": "0.2.0",
-  "description": "Save your device states to an InfluxDB",
+  "description": "Save your device states to an InfluxDB 2.0",
   "homepage_url": "https://github.com/AdamF42/influxdb-bridge#readme",
   "license": "MPL-2.0",
-  "author": "Tim Hellhake",
+  "author": "Tim Hellhake, Adamo Fapohunda",
   "gateway_specific_settings": {
     "webthings": {
       "exec": "{nodeLoader} {path}",
@@ -16,10 +16,15 @@
       "primary_type": "adapter"
     }
   },
+  
   "options": {
+    "default": {
+      "names": []
+    },
     "schema": {
       "type": "object",
       "required": [
+        "names",
         "accessToken",
         "host",
         "port",
@@ -28,6 +33,12 @@
         "influxToken"
       ],
       "properties": {
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "accessToken": {
           "type": "string",
           "title": "The access token for the gateway"

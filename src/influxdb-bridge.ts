@@ -4,12 +4,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.*
  */
 
-import { Adapter, } from 'gateway-addon';
+import { Adapter } from 'gateway-addon';
 import { WebThingsClient, Device } from 'webthings-client';
-import { client as WebSocketClient } from 'websocket';
-import {InfluxDB, Point} from '@influxdata/influxdb-client';
-import { Option, None} from 'space-lift'
+import {Point} from '@influxdata/influxdb-client';
+import { Option, None } from 'space-lift';
+import { Persister, IPersister} from './persister-influx';
+import { Client } from './ws-client';
 
+const PROPERTY_STATUS = 'propertyStatus';
 
 enum ThingDataType {
     BOOLEAN = "boolean",
@@ -63,102 +65,174 @@ interface ThingEvent {
     data: {}
 }
 
+
 export class InfluxDBBridge extends Adapter {
+
     constructor(addonManager: any, private manifest: any) {
         super(addonManager, InfluxDBBridge.name, manifest.name);
         addonManager.addAdapter(this);
-        this.connectToinflux();
+        this.saveAllDevices();
     }
 
-    private async connectToinflux() {
+    private async saveAllDevices() {
         const {
+            accessToken,
+            names,
             host,
             port,
             influxToken,
+            bucket,
+            org
         } = this.manifest.moziot.config;
 
-        const token:string = influxToken
-
-        console.log(`Connecting to influx at ${host}`);
 
         const url = `http://${host}:${port}`;
 
-        const influxDb = new InfluxDB({url, token}) 
+        const persister = new Persister(url,influxToken,org,bucket)
+        
+        const devices: Device[] = await this.getGatewayActiveThings(accessToken);
 
-        this.connectToGateway(influxDb);
+        let availableDevices = devices.filter(device => device.title in names)
+
+        availableDevices.forEach((device: Device) => this.saveToInflux(persister,device));
     }
 
-    private connectToGateway(influxDb: InfluxDB) {
+    private async getGatewayActiveThings(accessToken: string){
         console.log('Connecting to gateway');
+        const webThingsClient = await WebThingsClient.local(accessToken);
+        return await webThingsClient.getDevices();
+    }
 
+    private saveToInflux(persister:IPersister, device: Device) {
         const {
-            accessToken,
-            org,
-            bucket
+            accessToken
         } = this.manifest.moziot.config;
 
-        (async () => {
-            const webThingsClient = await WebThingsClient.local(accessToken);
-            const devices: Device[] = await webThingsClient.getDevices();
+        try {
+            const deviceId = device.title
 
-            for (const device of devices) {
-                try {
-                    const parts = device.href.split('/');
-                    const deviceId = parts[parts.length - 1];
+            console.log(`Connecting to websocket of ${deviceId}`);
+            const thingUrl = `ws://localhost:8080${device.href}`;
+            // TODO: reduce params
+            const webSocketClient = new Client(5000,`${thingUrl}?jwt=${accessToken}`);
 
-                    console.log(`Connecting to websocket of ${deviceId}`);
-                    const thingUrl = `ws://localhost:8080${device.href}`;
-                    const webSocketClient = new WebSocketClient();
+            webSocketClient.on('connectFailed', function (error) {
+                console.error(`Could not connect to ${thingUrl}: ${error}`)
 
-                    webSocketClient.on('connectFailed', function (error) {
-                        console.error(`Could not connect to ${thingUrl}: ${error}`)
-                    });
+            });
 
-                    webSocketClient.on('connect', function (connection) {
-                        console.log(`Connected to ${thingUrl}`);
+            webSocketClient.on('connect', function (connection) {
+                console.log(`Connected to ${thingUrl}`);
 
-                        connection.on('error', function (error) {
-                            console.log(`Connection to ${thingUrl} failed: ${error}`);
-                        });
+                connection.on('error', function (error) {
+                    switch (error.name){
+                        case 'ECONNREFUSED':
+                            console.error(`Try to rconnect to ${thingUrl}: ${error}`);
+                            webSocketClient.reconnect(`${thingUrl}?jwt=${accessToken}`);
+                            break;
+                        default:
+                            console.error(`Error connecting to ${thingUrl}: ${error}`)
+                            break;
+                        }
+                    webSocketClient.reconnect(`${thingUrl}?jwt=${accessToken}`)                            });
 
-                        connection.on('close', function () {
-                            console.log(`Connection to ${thingUrl} closed`);
-                        });
+                connection.on('close', function () {
+                    console.log(`Connection to ${thingUrl} closed`);
+                });
 
-                        connection.on('message', async function (message) {
-                            if (message.type === 'utf8' && message.utf8Data) {
-                                const thingEvent = <ThingEvent>JSON.parse(message.utf8Data);
+                connection.on('message', async function (message) {
+                    if (message.type === 'utf8' && message.utf8Data) {
+                        const thingEvent = <ThingEvent>JSON.parse(message.utf8Data);
+                        if (thingEvent.messageType === PROPERTY_STATUS) {
+                            Object.keys(thingEvent.data).forEach( key => {                                               
+                                new PointFactory(key, deviceId)
+                                .getInfluxPoint(<ThingDataType>device.properties[key].type, (<any>thingEvent.data)[key])
+                                .forEach((p)=> {
+                                    persister.writeData(p);
+                                });
+                            });                                      
+                        }
+                    }
+                });
+            
+            });
 
-                                if (thingEvent.messageType === 'propertyStatus') {
-                                    if (Object.keys(thingEvent.data).length > 0) {
-                                        Object.keys(thingEvent.data).forEach( key => {
-                                            
-                                            const point = new PointFactory(key, deviceId)
-                                                .getInfluxPoint(<ThingDataType>device.properties[key].type, (<any>thingEvent.data)[key])
-                 
-                                            point.forEach((p )=> {
-                                                const writeApi = influxDb
-                                                .getWriteApi(org, bucket);
-                                                // console.log(`TEST: device: ${deviceId} prop: ${key}, val ${p}`);
-                                                writeApi.writePoint(p);
-                                                writeApi
-                                                    .close()
-                                                    .catch((e: any) => {
-                                                        console.log('WRITE FAILED', e);
-                                                    });   
-                                            })
-                                        });
-                                    }
-                                }
-                            }
-                        });
-                    });
-
-                    webSocketClient.connect(`${thingUrl}?jwt=${accessToken}`);
-                } catch (e) {
-                    console.log(`Could not process device ${device.title} ${e}`);
-                }
-            }
-        })();
+            webSocketClient.connect(webSocketClient.clientUrl);
+        } catch (e) {
+            console.log(`Could not process device ${device.title} ${e}`);
+        }
     }
+
+    // private connectToGateway(persister: IPersister, savedDevice: string) {
+    //     console.log('Connecting to gateway');
+        
+    //     const {
+    //         accessToken,
+    //     } = this.manifest.moziot.config;
+
+    //     (async () => {
+    //         const webThingsClient = await WebThingsClient.local(accessToken);
+    //         const devices: Device[] = await webThingsClient.getDevices();
+            
+    //         devices.filter(device => device.title==savedDevice)
+    //             .forEach(device => {
+    //                 try {
+    //                     const deviceId = device.title
+    
+    //                     console.log(`Connecting to websocket of ${deviceId}`);
+    //                     const thingUrl = `ws://localhost:8080${device.href}`;
+    //                     // TODO: reduce params
+    //                     const webSocketClient = new Client(5000,`${thingUrl}?jwt=${accessToken}`);
+    
+    //                     webSocketClient.on('connectFailed', function (error) {
+    //                         console.error(`Could not connect to ${thingUrl}: ${error}`)
+
+    //                     });
+    
+    //                     webSocketClient.on('connect', function (connection) {
+    //                         console.log(`Connected to ${thingUrl}`);
+    
+    //                         connection.on('error', function (error) {
+    //                             switch (error.name){
+    //                                 case 'ECONNREFUSED':
+    //                                     console.error(`Try to rconnect to ${thingUrl}: ${error}`);
+    //                                     webSocketClient.reconnect(`${thingUrl}?jwt=${accessToken}`);
+    //                                     break;
+    //                                 default:
+    //                                     console.error(`Error connecting to ${thingUrl}: ${error}`)
+    //                                     break;
+    //                                 }
+    //                             webSocketClient.reconnect(`${thingUrl}?jwt=${accessToken}`)                            });
+    
+    //                         connection.on('close', function () {
+    //                             console.log(`Connection to ${thingUrl} closed`);
+    //                         });
+    
+    //                         connection.on('message', async function (message) {
+    //                             if (message.type === 'utf8' && message.utf8Data) {
+    //                                 const thingEvent = <ThingEvent>JSON.parse(message.utf8Data);
+    //                                 if (thingEvent.messageType === PROPERTY_STATUS) {
+    //                                     Object.keys(thingEvent.data).forEach( key => {                                               
+    //                                         new PointFactory(key, deviceId)
+    //                                         .getInfluxPoint(<ThingDataType>device.properties[key].type, (<any>thingEvent.data)[key])
+    //                                         .forEach((p)=> {
+    //                                             persister.writeData(p);
+    //                                         });
+    //                                     });                                      
+    //                                 }
+    //                             }
+    //                         });
+                        
+    //                     });
+    
+    //                     webSocketClient.connect(webSocketClient.clientUrl);
+    //                 } catch (e) {
+    //                     console.log(`Could not process device ${device.title} ${e}`);
+    //                 }
+    //             })
+          
+    //     })();
+    // }
+
+
 }
